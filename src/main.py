@@ -157,6 +157,12 @@ def run_rag(query: str) -> None:
 
     print("\nRecommendation (grounded in the retrieved songs):\n")
     print(result["answer"])
+
+    # Reliability signal: did the model stay within the retrieved candidates?
+    if result["ungrounded"]:
+        print(f"\n[grounding WARNING] mentions non-retrieved songs: {result['ungrounded']}")
+    else:
+        print("\n[grounding OK] all recommended songs came from the retrieved set")
     print()
 
 

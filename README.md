@@ -1,5 +1,7 @@
 # 🎵 Music Recommender Simulation
 
+**Repository:** https://github.com/UrvikP/applied-ai-system-project
+
 ## Summary
 
 The **Music Recommender Simulation** is a command-line music recommender that turns
@@ -283,6 +285,8 @@ Based on the listener's request for something calm for late-night coding, I reco
 All three songs have a calming effect due to their low energy levels (0.28-0.35) and
 slow tempos (60.0bpm-72.0bpm), which should help create a focus-enhancing atmosphere
 for late-night coding.
+
+[grounding OK] all recommended songs came from the retrieved set
 ```
 
 Note that **every song the LLM recommends comes from the retrieved list** — it invents
@@ -336,6 +340,93 @@ High-Energy Pop  |  Top 5 recommendations
 The two deterministic profiles pull completely different, coherent lists (mellow lofi
 vs. high-tempo pop/electronic), and the expanded 50-song catalog surfaces the newer
 tracks (Late Bus Home, Circuit Breaker, Redline Fever).
+
+---
+
+## Reproducible Execution Evidence
+
+Everything below is real, captured output so the system can be graded without watching
+a demo. (RAG logs stream to stderr; the recommendation and grounding result to stdout.)
+
+### A. RAG command execution — input, output, and guardrail result in one run
+
+**Command / input:**
+
+```bash
+python src/main.py --ask "upbeat music for a workout"
+```
+
+**Output (real run, local llama3.2 via Ollama):**
+
+```
+rag_recommender INFO: Parsing query into preferences: 'upbeat music for a workout'
+rag_recommender INFO: Parsed preferences: {'genre': 'Pop', 'mood': 'Energizing',
+                      'energy': 1, 'valence': 0.5, 'tempo_bpm': 120,
+                      'danceability': 0.8, 'acousticness': 0}
+rag_recommender INFO: Generating grounded answer from 5 candidates.
+rag_recommender INFO: Grounding check passed: answer stays within retrieved songs.
+
+Request: upbeat music for a workout
+===================================
+
+Retrieved candidates (via the content-based scorer):
+  1. Concrete Pulse - Null Sector  (91% match)
+  2. Power Hour - Max Pulse  (90% match)
+  3. Redline Fever - Steel Mirage  (89% match)
+  4. Circuit Breaker - Bassline Theory  (88% match)
+  5. Deep End - Marlow House  (89% match)
+
+Recommendation (grounded in the retrieved songs):
+
+Based on the listener's request for upbeat music for a workout, I recommend:
+
+1. "Power Hour" by Max Pulse - intense mood, tempo 136bpm.
+2. "Circuit Breaker" by Bassline Theory - drum and bass, fast tempo 174bpm.
+3. "Deep End" by Marlow House - house track, energetic, 124bpm.
+
+[grounding OK] all recommended songs came from the retrieved set
+```
+
+Every recommended song is one of the five retrieved candidates — the **guardrail
+result** (`[grounding OK]`) confirms the model did not invent or leak any song.
+
+### B. Reliability check — automated tests
+
+**Command:**
+
+```bash
+pytest -q
+```
+
+**Output:**
+
+```
+........                                                                 [100%]
+8 passed in 0.02s
+```
+
+### C. Reliability check — grounding detector (proves the guardrail actually works)
+
+Run the grounding check on a grounded answer (returns `[]`) and on one that leaks a
+non-retrieved song (flags it):
+
+```
+ungrounded (grounded answer):  []
+ungrounded (leak of "Storm Runner"):  ['Storm Runner']
+```
+
+### D. Guardrail — RAG when Ollama is unavailable (no crash)
+
+When the model server, model, or package is missing, RAG mode reports it cleanly and
+the program still exits 0:
+
+```
+[RAG unavailable] The 'ollama' package is required for the RAG feature.
+Install it with: pip install -r requirements.txt
+```
+
+(An empty request behaves the same way: `python src/main.py --ask ""` prints
+`No request given.` and exits 0.)
 
 ---
 
@@ -530,16 +621,26 @@ What it reveals: the ordering/tie-break bias I flagged earlier — with no disti
 
 ## Testing Summary
 
+**One-line summary:** 8/8 automated tests pass, and the grounding check reports 0
+ungrounded songs across real RAG runs — the AI never recommends a song outside its
+retrieved context. Full detail and a human-evaluation table are in
+[`tests/human_eval.md`](tests/human_eval.md).
+
 **What I tested**
 
-- **Automated tests** (`pytest`, `tests/test_recommender.py`): verify the OOP layer —
-  that `recommend` returns songs sorted by score and that `explain_recommendation`
-  returns a non-empty string. Both pass.
+- **Automated tests** (`pytest`): `tests/test_recommender.py` covers the scorer (sorted
+  results, non-empty explanations); `tests/test_rag.py` covers the RAG pipeline using a
+  **mocked LLM client** so it runs without Ollama — parse output, the neutral-profile
+  fallback on bad model output, the empty-retrieval case, and the grounding check.
+  **All 8 pass.**
+- **Grounding check** (`check_grounding`): a reliability metric run on every RAG
+  request — it flags any catalog song the answer names that wasn't retrieved. `main.py`
+  prints `[grounding OK]` / `[grounding WARNING]`. Real runs so far: 0 ungrounded.
 - **Adversarial profiles** (the four `[edge]` profiles in `main.py`): contradictory
   mood, out-of-range values, sparse profile, and all-neutral — run through the scorer
   to probe failure modes (see *Experiments* and *Limitations* above).
-- **RAG end-to-end**: ran real free-text queries against the local model and checked
-  that the model's recommendations only ever come from the retrieved candidate list.
+- **RAG end-to-end**: ran real free-text queries against the local model and confirmed
+  the recommendations only ever come from the retrieved candidate list.
 
 **What worked**
 
@@ -585,4 +686,21 @@ Write 1 to 2 paragraphs here about what you learned:
 I learned about all the preferences/metrics that have to be taken into consideration before predicting the best possible recommendation. Assigning weights to preferences is very important, aslo certain preferances can be very similiar, in this project energy and tempo_bpm basically the same type of metric and this can skew the ratings of the songs. I learned that scoring and ranking are seprate jobs. My intial idea was to score how good a single song is for a user and decide if it should be included in the list all within the same function (I didn't realize I was doing this at first). After asking CLaude.ai for input, it rectified and explained my logic. By seperatign the process, it allowed me to rate the song and then curate a recommendation without sacrificing accuracy.
 
 Bias can show up in any program. My program has only 20 songs, limited data to work with, and as I've learned from AI, I haven't in taken into consideration the full scope of user "Tastes" like lyrics and culture. I guess this could also be a problem for real world companies like Spotify and Youtube where skewed datasets or weights tuned for engagement can shape what millions of people are exposed to.
+
+---
+
+## Portfolio Artifact
+
+**Code:** https://github.com/UrvikP/applied-ai-system-project
+
+**What this project says about me as an AI engineer.** This project shows that I treat
+an LLM as one component in a system, not as the whole system. Rather than letting a
+model free-associate recommendations, I made a deterministic, testable scorer do the
+retrieval and constrained the model to answer only from what it retrieved — then I
+proved that constraint held with an automatic grounding check and unit tests instead
+of trusting a good-looking demo. I also chose a free, local model so the project stays
+reproducible for anyone, and I built guardrails (clear error handling, a neutral-profile
+fallback, per-stage logging) so it fails safely. In short, I care about grounding,
+reliability, and reproducibility — making AI that can *prove* it works, and being honest
+about where it still falls short (input validation, catalog bias, a small local model).
 

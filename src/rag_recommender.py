@@ -191,6 +191,31 @@ def generate_grounded_answer(
     return response["message"]["content"]
 
 
+def check_grounding(
+    answer: str,
+    retrieved: List[Tuple[Dict, float, str]],
+    songs: List[Dict],
+) -> List[str]:
+    """
+    Reliability check: verify the generated answer is grounded in retrieval.
+
+    Returns the titles of any catalog song that the answer mentions but that was
+    NOT in the retrieved candidate set — i.e. songs the model "leaked" from
+    outside its allowed context. An empty list means the answer is grounded.
+
+    This catches the concrete failure mode (recommending a real song that wasn't
+    retrieved) precisely, without false-flagging ordinary prose.
+    """
+    retrieved_titles = {song["title"] for song, _score, _r in retrieved}
+    lowered = answer.lower()
+    return [
+        song["title"]
+        for song in songs
+        if song["title"] not in retrieved_titles
+        and song["title"].lower() in lowered
+    ]
+
+
 def recommend_from_query(
     query: str,
     songs: List[Dict],
@@ -203,10 +228,11 @@ def recommend_from_query(
     Returns a dict with the intermediate artifacts so callers (and tests) can
     inspect each stage:
         {
-          "query":     the original request,
-          "prefs":     parsed user_prefs dict (stage 1),
-          "retrieved": list of (song, score, explanation) (stage 2),
-          "answer":    grounded natural-language recommendation (stage 3),
+          "query":      the original request,
+          "prefs":      parsed user_prefs dict (stage 1),
+          "retrieved":  list of (song, score, explanation) (stage 2),
+          "answer":     grounded natural-language recommendation (stage 3),
+          "ungrounded": titles the answer leaked from outside retrieval ([] = OK),
         }
     """
     client = client or _get_client()
@@ -215,4 +241,16 @@ def recommend_from_query(
     retrieved = recommend_songs(prefs, songs, k=k)
     answer = generate_grounded_answer(query, retrieved, client=client)
 
-    return {"query": query, "prefs": prefs, "retrieved": retrieved, "answer": answer}
+    ungrounded = check_grounding(answer, retrieved, songs)
+    if ungrounded:
+        logger.warning("Answer mentions non-retrieved songs: %s", ungrounded)
+    else:
+        logger.info("Grounding check passed: answer stays within retrieved songs.")
+
+    return {
+        "query": query,
+        "prefs": prefs,
+        "retrieved": retrieved,
+        "answer": answer,
+        "ungrounded": ungrounded,
+    }

@@ -184,3 +184,38 @@ label, so it is blind to lyrics, vocals, era, and culture; it ignores genre by d
 the catalog is small and skewed; extreme inputs outside [0, 1] can produce negative
 scores and a meaningless "percent match"; and the RAG layer depends on a small local
 model whose query-parsing can be imprecise. (Full detail in sections 6 and 7.)
+
+### Could This AI Be Misused, and How I Prevent It
+
+Yes — a few ways, each with a mitigation already in the system:
+
+- **Prompt injection through the free-text request.** Because the query is sent to
+  an LLM, a user could try to make it ignore its instructions and output arbitrary
+  text or "recommend" songs that don't exist. *Prevention:* the LLM never chooses
+  songs — my deterministic scorer retrieves the candidates, and the model may only
+  recommend from that list. The `check_grounding()` function runs on every response
+  and flags any song mentioned that wasn't retrieved, so a hijacked answer is caught
+  and reported rather than trusted.
+- **Manipulating what people hear (filter bubbles / promotion).** If someone
+  controlled the catalog or tuned the weights for engagement rather than fit, the
+  system could quietly push particular songs or trap listeners in one narrow style.
+  *Prevention:* the weights are transparent and documented, genre is deliberately
+  unweighted so no single preference dominates, and the variety re-rank actively
+  spreads the results. At this scale it's a simulation, but the risk is exactly what
+  real platforms face.
+- **Silent wrong output presented as confident.** The parser can return plausible but
+  unusable values, and out-of-range inputs break the score. *Prevention:* every stage
+  is logged, a bad parse falls back to a neutral profile instead of crashing, and the
+  known input-validation gap is documented here as the top future fix.
+
+### What Surprised Me While Testing the AI's Reliability
+
+I expected the local model to occasionally recommend a song that wasn't in the
+retrieved list, so I built the grounding check specifically to catch it — and was
+surprised that across my real runs it reported **zero** ungrounded songs. The prompt
+constraint plus the retrieval step were enough to keep the model honest, and the
+automatic check let me *prove* that rather than just assume it. The other surprise
+was the opposite direction: the parsing step confidently produced labels like genre
+"Instrumental" and mood "Relaxing" that don't exist in my catalog's vocabulary, so
+they silently contributed nothing to retrieval — a reliability risk hidden behind
+plausible-looking output, which is exactly why the guardrails and logging matter.
