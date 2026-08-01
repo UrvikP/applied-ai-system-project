@@ -1,4 +1,4 @@
 pandas
 pytest
 streamlit
-anthropic
+ollama

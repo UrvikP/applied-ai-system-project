@@ -12,7 +12,7 @@ Two modes:
     Augmented Generation pipeline in rag_recommender.py — the scorer retrieves
     candidate songs, then Claude writes a grounded recommendation over them.
 
-        export ANTHROPIC_API_KEY=sk-ant-...
+        ollama serve                      # start the local model server
         python src/main.py --ask "something calm for late-night coding"
         python src/main.py --ask          # interactive prompt
 """

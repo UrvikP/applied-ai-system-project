@@ -17,9 +17,9 @@ flowchart TD
 
     %% ---------- RAG pipeline ----------
     subgraph RAG["RAG pipeline (src/rag_recommender.py)"]
-        PARSE["1. Parse query -> user_prefs<br/>Claude (schema-constrained)"]
+        PARSE["1. Parse query -> user_prefs<br/>Local LLM via Ollama (schema-constrained)"]
         RETR["2. Retriever<br/>recommend_songs(): score + variety re-rank"]
-        GEN["3. Generate grounded answer<br/>Claude (only from retrieved songs)"]
+        GEN["3. Generate grounded answer<br/>Local LLM (only from retrieved songs)"]
     end
 
     %% ---------- Deterministic core ----------
@@ -68,8 +68,9 @@ flowchart TD
   taste profiles (profile demo).
 - **Retriever** — the existing `recommend_songs` scorer over `songs.csv`; it is
   reused as the RAG retriever so the AI feature is integrated, not bolted on.
-- **Agent (LLM stages)** — Claude parses the query (stage 1) and generates the
-  final recommendation grounded only in retrieved songs (stage 3).
+- **Agent (LLM stages)** — a local LLM (via Ollama) parses the query (stage 1)
+  and generates the final recommendation grounded only in retrieved songs
+  (stage 3).
 - **Evaluator / Tester** — `pytest` checks the deterministic scorer; guardrails
   validate the LLM stages at runtime (fallbacks, grounding, logging).
 - **Human-in-the-loop** — a person runs adversarial edge-case profiles and reads

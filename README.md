@@ -156,17 +156,19 @@ You can add more tests in `tests/test_recommender.py`.
 ## AI Feature: Retrieval-Augmented Generation (RAG)
 
 On top of the deterministic content-based recommender, the system includes a
-**RAG** mode that answers free-text listening requests. The retrieval step is
-the existing scorer, so the AI feature is fully integrated rather than bolted on.
+**RAG** mode that answers free-text listening requests. It runs on a **local LLM
+via [Ollama](https://ollama.com)** — free, no API key, works offline. The
+retrieval step is the existing scorer, so the AI feature is fully integrated
+rather than bolted on.
 
 **Pipeline** (`src/rag_recommender.py`):
 
-1. **Parse** — Claude turns a request like *"something calm for late-night
+1. **Parse** — the local LLM turns a request like *"something calm for late-night
    coding"* into a numeric `user_prefs` profile (schema-constrained call).
 2. **Retrieve** — the existing `recommend_songs` scorer ranks `data/songs.csv`
    against that profile and returns the top-k candidates. The CSV is the
    knowledge base; the scorer is the retriever.
-3. **Generate** — Claude writes the recommendation **grounded only in the
+3. **Generate** — the LLM writes the recommendation **grounded only in the
    retrieved candidates**, and is instructed to recommend nothing outside that
    list (and to say so when nothing fits).
 
@@ -175,13 +177,22 @@ recommend songs it wasn't given.
 
 ### Setup for RAG
 
-RAG needs an Anthropic API key (the `anthropic` package is already in
-`requirements.txt`):
+RAG runs a local model through Ollama — no API key, no account, no cost.
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...        # Mac or Linux
-setx ANTHROPIC_API_KEY "sk-ant-..."        # Windows
-```
+1. Install Ollama from https://ollama.com and start the server:
+
+   ```bash
+   ollama serve
+   ```
+
+2. Download the model once (~2 GB, runs on a typical laptop):
+
+   ```bash
+   ollama pull llama3.2
+   ```
+
+The `ollama` Python package is already in `requirements.txt`. To use a different
+local model, set `OLLAMA_MODEL` (e.g. `export OLLAMA_MODEL=mistral`).
 
 ### Running RAG mode
 
@@ -191,9 +202,9 @@ python src/main.py --ask                    # interactive prompt
 ```
 
 Without `--ask`, the app runs the original profile demo. **Guardrails**: a
-missing key or package is reported cleanly (no stack trace), a failed query
-parse falls back to a neutral profile so retrieval still runs, and every stage
-is logged to stderr.
+stopped Ollama server, missing model, or missing package is reported cleanly
+(no stack trace), a failed query parse falls back to a neutral profile so
+retrieval still runs, and every stage is logged to stderr.
 
 ---
 

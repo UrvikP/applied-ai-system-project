@@ -1,39 +1,47 @@
 """
 Retrieval-Augmented Generation (RAG) layer for the music recommender.
 
-Pipeline (all three stages are load-bearing — the retrieved songs drive the
-final answer, they are not printed alongside a canned response):
+Uses a LOCAL LLM via Ollama (https://ollama.com) — free, no API key, runs
+offline on your machine. The pipeline (all three stages are load-bearing — the
+retrieved songs drive the final answer, they are not printed alongside a canned
+response):
 
     1. RETRIEVE-PREP  A free-text request ("something calm for late-night
-                      coding") is parsed by Claude into a user_prefs dict whose
+                      coding") is parsed by the LLM into a user_prefs dict whose
                       keys match the song dicts (genre, mood, energy, ...).
     2. RETRIEVE       The EXISTING content-based scorer (recommend_songs) ranks
                       the CSV catalog against those prefs and returns the top-k
                       candidates. The CSV is the knowledge base; the scorer is
                       the retriever. No LLM involvement here.
-    3. GENERATE       Claude writes the recommendation grounded ONLY in the
-                      retrieved candidates. It is instructed to recommend
-                      nothing outside that list and to say so when nothing fits.
+    3. GENERATE       The LLM writes the recommendation grounded ONLY in the
+                      retrieved candidates. It is instructed to recommend nothing
+                      outside that list and to say so when nothing fits.
 
-Guardrails: missing API key is reported clearly, a failed parse falls back to a
-neutral profile (so retrieval still runs), the generation prompt forbids
-inventing songs, and every stage is logged.
+Guardrails: a stopped Ollama server or missing model is reported clearly, a
+failed parse falls back to a neutral profile (so retrieval still runs), the
+generation prompt forbids inventing songs, and every stage is logged.
 """
 
 import json
 import logging
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from recommender import recommend_songs
 
 logger = logging.getLogger("rag_recommender")
 
-# Default model. Opus 5 is the current, most capable Claude model.
-MODEL = "claude-opus-5"
+# Local model served by Ollama. Override with the OLLAMA_MODEL env var.
+# llama3.2 is small (~2GB) and runs on a typical laptop. Pull it once with:
+#     ollama pull llama3.2
+MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+
+# Where the Ollama server listens. The ollama client also reads OLLAMA_HOST.
+HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 
 # The catalog fields the parser is allowed to fill. Kept in sync with the CSV
-# columns that score_song actually reads.
+# columns that score_song actually reads. Passed to Ollama as a JSON schema so
+# the model returns structured, parseable output.
 _PREF_SCHEMA = {
     "type": "object",
     "properties": {
@@ -59,49 +67,71 @@ _NEUTRAL_PREFS = {
 
 def _get_client():
     """
-    Construct an Anthropic client, surfacing a clear message if the API key is
-    missing rather than a deep SDK stack trace.
+    Build an Ollama client and verify the server is running and the model is
+    available — surfacing a clear, actionable message instead of a deep SDK
+    stack trace.
     """
     try:
-        import anthropic
+        import ollama
     except ImportError as exc:  # dependency not installed
         raise RuntimeError(
-            "The 'anthropic' package is required for the RAG feature. "
+            "The 'ollama' package is required for the RAG feature. "
             "Install it with: pip install -r requirements.txt"
         ) from exc
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    client = ollama.Client(host=HOST)
+
+    # Is the server up?
+    try:
+        listed = client.list()
+    except Exception as exc:  # noqa: BLE001 - connection refused, etc.
         raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set. Export your key first:\n"
-            "    export ANTHROPIC_API_KEY=sk-ant-..."
+            f"Could not reach the Ollama server at {HOST}. "
+            "Install Ollama from https://ollama.com, then start it with:\n"
+            "    ollama serve"
+        ) from exc
+
+    # Is the model pulled? (names look like 'llama3.2:latest')
+    available = [m.model for m in listed.models]
+    if not any(m == MODEL or m.split(":")[0] == MODEL.split(":")[0] for m in available):
+        raise RuntimeError(
+            f"Model '{MODEL}' is not installed in Ollama. Pull it once with:\n"
+            f"    ollama pull {MODEL}\n"
+            f"(or set OLLAMA_MODEL to one you already have: {', '.join(available) or 'none'})"
         )
-    return anthropic.Anthropic()
+
+    return client
 
 
 def parse_query_to_prefs(query: str, client=None) -> Dict:
     """
     Stage 1: turn a free-text request into a user_prefs dict via a small,
-    schema-constrained Claude call. Falls back to a neutral profile on any
-    failure so the pipeline can still retrieve.
+    schema-constrained LLM call. Falls back to a neutral profile on any failure
+    so the pipeline can still retrieve.
     """
     client = client or _get_client()
     logger.info("Parsing query into preferences: %r", query)
 
     try:
-        response = client.messages.create(
+        response = client.chat(
             model=MODEL,
-            max_tokens=512,
-            system=(
-                "You translate a listener's free-text request into numeric music "
-                "preferences. Infer sensible values for every field from the "
-                "request; use '' for a genre/mood the user did not imply, and "
-                "0.5 / mid-tempo for numeric fields you cannot infer."
-            ),
-            output_config={"format": {"type": "json_schema", "schema": _PREF_SCHEMA}},
-            messages=[{"role": "user", "content": query}],
+            format=_PREF_SCHEMA,  # constrain output to the schema (returns JSON)
+            options={"temperature": 0},  # deterministic parsing
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You translate a listener's free-text request into numeric "
+                        "music preferences. Infer sensible values for every field "
+                        "from the request; use '' for a genre/mood the user did not "
+                        "imply, and 0.5 / mid-tempo for numeric fields you cannot "
+                        "infer. Respond with JSON only."
+                    ),
+                },
+                {"role": "user", "content": query},
+            ],
         )
-        text = next(b.text for b in response.content if b.type == "text")
-        prefs = json.loads(text)
+        prefs = json.loads(response["message"]["content"])
         logger.info("Parsed preferences: %s", prefs)
         return prefs
     except Exception as exc:  # noqa: BLE001 - fall back, never crash retrieval
@@ -151,13 +181,14 @@ def generate_grounded_answer(
     )
     user = f"Listener request: {query}\n\nCANDIDATE songs:\n{candidates}"
 
-    response = client.messages.create(
+    response = client.chat(
         model=MODEL,
-        max_tokens=1024,
-        system=system,
-        messages=[{"role": "user", "content": user}],
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
     )
-    return next(b.text for b in response.content if b.type == "text")
+    return response["message"]["content"]
 
 
 def recommend_from_query(
