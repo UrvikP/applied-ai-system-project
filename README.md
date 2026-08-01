@@ -1,17 +1,49 @@
 # 🎵 Music Recommender Simulation
 
-## Project Summary
+## Summary
 
-In this project you will build and explain a small music recommender system.
+The **Music Recommender Simulation** is a command-line music recommender that turns
+songs and a listener's taste profile into ranked recommendations, each with a
+plain-language explanation of *why* it was picked. This phase adds a
+**Retrieval-Augmented Generation (RAG)** mode: you can now describe what you want in
+plain English ("something calm for late-night coding") and a local LLM answers using
+songs retrieved by the original scoring engine. This matters because it shows how a
+small, transparent, rule-based system can be paired with an LLM so the model stays
+**grounded in real catalog data** instead of inventing recommendations.
 
-Your goal is to:
+### Original Project (Modules 3)
 
-- Represent songs and a user "taste profile" as data
-- Design a scoring rule that turns that data into recommendations
-- Evaluate what your system gets right and wrong
-- Reflect on how this mirrors real world AI recommenders
+This builds directly on my original **Music Recommender Simulation** from Module
+3. That project represented each song and a user "taste profile" as numeric data
+(energy, valence, tempo, danceability, acousticness, plus mood and genre), designed a
+content-based scoring rule that measured how closely each song matched the profile,
+and ranked the catalog into a top-K list using a variety re-rank and human-readable
+reasons. Its goal was to show, end to end, how raw preference data becomes explainable
+recommendations — and where bias can creep in.
 
-Replace this paragraph with your own summary of what your version does.
+---
+
+## Architecture Overview
+
+The full system diagram is in
+[`diagrams/system_diagram.mmd`](diagrams/system_diagram.mmd) (Mermaid source; also
+rendered in [`diagrams/system_diagram.md`](diagrams/system_diagram.md)).
+
+Data flows **input → process → output** along two paths:
+
+- **Profile demo (no LLM):** a hardcoded taste profile → the content-based **scorer**
+  (`score_song` + variety re-rank in `recommend_songs`) over `data/songs.csv` →
+  ranked recommendations with reasons.
+- **RAG mode (LLM):** a free-text request → **(1) parse** it into a numeric profile
+  with the local LLM → **(2) retrieve** the top-K candidates using the *same* scorer
+  (the CSV is the knowledge base, the scorer is the retriever) → **(3) generate** a
+  recommendation grounded only in those retrieved songs.
+
+Checking happens in two places: **automated tests** (`pytest`) verify the
+deterministic scorer, and **runtime guardrails** (server/model checks, a
+neutral-profile fallback, a grounding constraint, and per-stage logging) validate the
+LLM stages. A human reviews the grounded output and the adversarial edge-case
+profiles, and tunes weights/prompts from there.
 
 ---
 
@@ -135,11 +167,13 @@ Some biases:
 pip install -r requirements.txt
 ```
 
-3. Run the app:
+3. Run the app (profile demo — no LLM or internet needed):
 
 ```bash
-python -m src.main
+python src/main.py
 ```
+
+   For the RAG mode (free-text requests), see **Running RAG mode** below.
 
 ### Running Tests
 
@@ -208,15 +242,60 @@ retrieval still runs, and every stage is logged to stderr.
 
 ---
 
-## Sample Recommendation Output
+## Sample Interactions
 
-Paste a sample of your recommender's output here as a text block so a reader can see what it produces:
+Three real, reproducible runs against the 50-song catalog.
+
+### Example 1 — RAG mode (free-text → grounded AI recommendation)
+
+**Input:**
+
+```bash
+python src/main.py --ask "something calm for late-night coding"
+```
+
+**Output** (local `llama3.2` via Ollama; logs show each stage):
 
 ```
-Loaded 20 songs from /Users/urvikpatel/Desktop/ai110-module3show-musicrecommendersimulation-starter/data/songs.csv
+Parsing query into preferences: 'something calm for late-night coding'
+Parsed preferences: {'genre': 'Instrumental', 'mood': 'Relaxing', 'energy': 0.5,
+                     'valence': 0.5, 'tempo_bpm': 60, 'danceability': 0.5, 'acousticness': 0.8}
+Generating grounded answer from 5 candidates.
 
-Top 5 recommendations for a focused / lofi listener
-===================================================
+Request: something calm for late-night coding
+=============================================
+
+Retrieved candidates (via the content-based scorer):
+  1. City Lights Fade - LoRoom  (92% match)
+  2. Spacewalk Thoughts - Orbit Bloom  (88% match)
+  3. Library Rain - Paper Lanterns  (90% match)
+  4. Deep Focus - LoRoom  (91% match)
+  5. Focus Flow - LoRoom  (91% match)
+
+Recommendation (grounded in the retrieved songs):
+
+Based on the listener's request for something calm for late-night coding, I recommend:
+
+1. "Spacewalk Thoughts" by Orbit Bloom
+2. "Library Rain" by Paper Lanterns
+3. "Deep Focus" by LoRoom
+
+All three songs have a calming effect due to their low energy levels (0.28-0.35) and
+slow tempos (60.0bpm-72.0bpm), which should help create a focus-enhancing atmosphere
+for late-night coding.
+```
+
+Note that **every song the LLM recommends comes from the retrieved list** — it invents
+nothing and even cites the real energy/tempo values from the retrieved data. That
+grounding is what makes this RAG rather than a plain LLM answer.
+
+### Example 2 — Profile demo, "Late-Night Focus" listener (deterministic scorer)
+
+**Input:** `python src/main.py`  (excerpt for the Late-Night Focus profile)
+
+```
+Late-Night Focus  |  Top 5 recommendations
+==========================================
 
 1. Focus Flow - LoRoom
    Match score: 1.00  (100%)
@@ -228,45 +307,35 @@ Top 5 recommendations for a focused / lofi listener
      - it closely matches your danceability preference
      - it has the mood you like (focused)
 
-2. Deep Focus - LoRoom
-   Match score: 1.00  (100%)
-   Why this song:
-     - it closely matches your acousticness preference
-     - it closely matches your energy preference
-     - it closely matches your tempo_bpm preference
-     - it closely matches your valence preference
-     - it closely matches your danceability preference
-     - it has the mood you like (focused)
-
-3. Slow Morning - Slow Stereo
-   Match score: 0.96  (96%)
-   Why this song:
-     - it closely matches your acousticness preference
-     - it closely matches your energy preference
-     - it closely matches your tempo_bpm preference
-     - it closely matches your valence preference
-     - it closely matches your danceability preference
-
-4. Rainy Window Seat - Paper Lanterns
-   Match score: 0.95  (95%)
-   Why this song:
-     - it closely matches your acousticness preference
-     - it closely matches your energy preference
-     - it closely matches your tempo_bpm preference
-     - it closely matches your valence preference
-     - it closely matches your danceability preference
-
-5. City Lights Fade - LoRoom
-   Match score: 0.96  (96%)
-   Why this song:
-     - it closely matches your acousticness preference
-     - it closely matches your energy preference
-     - it closely matches your tempo_bpm preference
-     - it closely matches your valence preference
-     - it closely matches your danceability preference
+2. Deep Focus - LoRoom            Match score: 1.00  (100%)
+3. Slow Morning - Slow Stereo     Match score: 0.96  (96%)
+4. Rainy Window Seat - Paper Lanterns   Match score: 0.95  (95%)
+5. Late Bus Home - Mellow Kanto   Match score: 0.95  (95%)
 ```
 
-**Screenshot or video** *(optional)*: <!-- Insert a screenshot or demo video link here -->
+### Example 3 — Profile demo, "High-Energy Pop" listener (deterministic scorer)
+
+**Input:** `python src/main.py`  (excerpt for the High-Energy Pop profile)
+
+```
+High-Energy Pop  |  Top 5 recommendations
+=========================================
+
+1. Gym Hero - Max Pulse
+   Match score: 1.00  (100%)
+   Why this song:
+     - it closely matches your energy preference
+     - it closely matches your tempo_bpm preference
+     - it closely matches your danceability preference
+     - it has the mood you like (intense)
+
+2. Circuit Breaker - Bassline Theory   Match score: 0.99  (99%)
+3. Redline Fever - Steel Mirage        Match score: 0.98  (98%)
+```
+
+The two deterministic profiles pull completely different, coherent lists (mellow lofi
+vs. high-tempo pop/electronic), and the expanded 50-song catalog surfaces the newer
+tracks (Late Bus Home, Circuit Breaker, Redline Fever).
 
 ---
 
@@ -399,6 +468,32 @@ EDGE CASES OUTPUT
 
 ---
 
+## Design Decisions
+
+Key choices and the trade-offs behind them:
+
+- **Separate scoring from ranking.** `score_song` judges one song in isolation;
+  `recommend_songs` handles variety across the whole set. *Trade-off:* slightly more
+  code and two passes, but variety never corrupts match accuracy — I don't have to
+  drop features to avoid five near-identical results.
+- **Genre carried but weighted 0.** Genre is kept for display/classification but not
+  scored, so no single preference dominates. *Trade-off:* loses an obvious signal a
+  real service would use, in exchange for a more balanced weighted sum.
+- **Reuse the scorer as the RAG retriever.** The LLM does not choose songs — the
+  existing scorer retrieves candidates and the model may only recommend from them.
+  *Trade-off:* the model can't surface anything outside the catalog, but in return it
+  can't hallucinate songs, which is the whole point of adding RAG.
+- **Local LLM (Ollama) instead of a paid API.** Runs offline, free, no API key.
+  *Trade-off:* the reviewer must install Ollama and pull a model, and a small local
+  model (llama3.2) writes weaker prose and is slower (~15–25s/stage) than a large
+  cloud model — but the project stays free and reproducible.
+- **Guardrails over crashes.** Missing server/model/package is reported cleanly, and a
+  failed query-parse falls back to a neutral profile so retrieval still runs.
+  *Trade-off:* a neutral fallback can produce a generic result instead of an error,
+  but the app never dies mid-request.
+
+---
+
 ## Limitations and Risks
 
 Summarize some limitations of your recommender.
@@ -430,6 +525,49 @@ What it reveals: missing features are silently skipped, so only 0.25 (energy wei
 
 Result: scores bunch tightly (0.80–0.83) and ties break by catalog order.
 What it reveals: the ordering/tie-break bias I flagged earlier — with no distinguishing signal, whichever song appears first in the CSV wins.
+
+---
+
+## Testing Summary
+
+**What I tested**
+
+- **Automated tests** (`pytest`, `tests/test_recommender.py`): verify the OOP layer —
+  that `recommend` returns songs sorted by score and that `explain_recommendation`
+  returns a non-empty string. Both pass.
+- **Adversarial profiles** (the four `[edge]` profiles in `main.py`): contradictory
+  mood, out-of-range values, sparse profile, and all-neutral — run through the scorer
+  to probe failure modes (see *Experiments* and *Limitations* above).
+- **RAG end-to-end**: ran real free-text queries against the local model and checked
+  that the model's recommendations only ever come from the retrieved candidate list.
+
+**What worked**
+
+- The scorer ranks coherent profiles sensibly, and the variety re-rank keeps the top-K
+  from being five clones.
+- RAG grounding held up: in the "late-night coding" run, every recommended song was
+  from the retrieved set and the model cited the real feature values.
+- Guardrails behaved — with Ollama not installed, RAG mode reports a clean message
+  instead of a stack trace, and the profile demo runs with zero setup.
+
+**What didn't / what's rough**
+
+- The out-of-range profile exposed a real bug: `closeness = 1 - |user - song|` can go
+  **negative** when inputs exceed [0, 1], and tempo saturates the clamp — so the
+  "percent match" label becomes meaningless. Inputs are not validated to [0, 1].
+- Sparse profiles silently skip missing features, so scores aren't comparable across
+  profiles (the weight denominator changes).
+- The local LLM is slow and its prose quality is modest; occasionally it returns a
+  loosely-worded profile, which the neutral fallback and grounding constraint absorb.
+
+**What I learned**
+
+- Scoring and ranking are genuinely separate jobs; conflating them quietly trades away
+  accuracy.
+- Correlated features (energy and tempo) double-count and skew results even when the
+  weights look balanced.
+- RAG is only as trustworthy as its grounding constraint — the retrieval step, not the
+  model, is what keeps the recommendations honest.
 
 ---
 
