@@ -1,13 +1,24 @@
 """
 Command line runner for the Music Recommender Simulation.
 
-This file helps you quickly run and test your recommender.
+Two modes:
 
-You will implement the functions in recommender.py:
-- load_songs
-- score_song
-- recommend_songs
+  * Profile demo (default): runs the hardcoded taste profiles below through the
+    content-based scorer and prints ranked recommendations.
+
+        python src/main.py
+
+  * RAG mode: takes a free-text request and answers it with the Retrieval-
+    Augmented Generation pipeline in rag_recommender.py — the scorer retrieves
+    candidate songs, then Claude writes a grounded recommendation over them.
+
+        export ANTHROPIC_API_KEY=sk-ant-...
+        python src/main.py --ask "something calm for late-night coding"
+        python src/main.py --ask          # interactive prompt
 """
+
+import logging
+import sys
 
 from recommender import load_songs, recommend_songs, score_song
 
@@ -110,13 +121,63 @@ def print_recommendations(name: str, user_prefs: dict, songs: list, k: int = 5) 
             print(f"     - it {reason}")
 
 
-def main() -> None:
+def run_profile_demo() -> None:
+    """Default mode: run every taste profile through the content-based scorer."""
     songs = load_songs("data/songs.csv")
 
     for name, prefs in PROFILES.items():
         print_recommendations(name, prefs, songs)
 
     print()
+
+
+def run_rag(query: str) -> None:
+    """
+    RAG mode: retrieve candidates with the existing scorer, then have Claude
+    generate a recommendation grounded in those retrieved songs.
+    """
+    # Imported lazily so the profile demo has no hard dependency on the LLM stack.
+    from rag_recommender import recommend_from_query
+
+    songs = load_songs("data/songs.csv")
+
+    try:
+        result = recommend_from_query(query, songs, k=5)
+    except RuntimeError as exc:
+        # Setup problems (missing key / package) — report cleanly, don't stack-trace.
+        print(f"\n[RAG unavailable] {exc}")
+        return
+
+    print(f"\nRequest: {result['query']}")
+    print("=" * (9 + len(result["query"])))
+
+    print("\nRetrieved candidates (via the content-based scorer):")
+    for rank, (song, score, _explanation) in enumerate(result["retrieved"], start=1):
+        print(f"  {rank}. {song['title']} - {song['artist']}  ({score:.0%} match)")
+
+    print("\nRecommendation (grounded in the retrieved songs):\n")
+    print(result["answer"])
+    print()
+
+
+def main() -> None:
+    # Emit progress/guardrail logs from the RAG pipeline to stderr.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+    )
+
+    args = sys.argv[1:]
+    if args and args[0] == "--ask":
+        query = " ".join(args[1:]).strip()
+        if not query:
+            query = input("Describe what you want to listen to: ").strip()
+        if not query:
+            print("No request given.")
+            return
+        run_rag(query)
+    else:
+        run_profile_demo()
 
 
 if __name__ == "__main__":

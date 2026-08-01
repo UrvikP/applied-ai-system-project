@@ -153,6 +153,50 @@ You can add more tests in `tests/test_recommender.py`.
 
 ---
 
+## AI Feature: Retrieval-Augmented Generation (RAG)
+
+On top of the deterministic content-based recommender, the system includes a
+**RAG** mode that answers free-text listening requests. The retrieval step is
+the existing scorer, so the AI feature is fully integrated rather than bolted on.
+
+**Pipeline** (`src/rag_recommender.py`):
+
+1. **Parse** — Claude turns a request like *"something calm for late-night
+   coding"* into a numeric `user_prefs` profile (schema-constrained call).
+2. **Retrieve** — the existing `recommend_songs` scorer ranks `data/songs.csv`
+   against that profile and returns the top-k candidates. The CSV is the
+   knowledge base; the scorer is the retriever.
+3. **Generate** — Claude writes the recommendation **grounded only in the
+   retrieved candidates**, and is instructed to recommend nothing outside that
+   list (and to say so when nothing fits).
+
+The retrieved songs actively determine the answer — the model is not allowed to
+recommend songs it wasn't given.
+
+### Setup for RAG
+
+RAG needs an Anthropic API key (the `anthropic` package is already in
+`requirements.txt`):
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...        # Mac or Linux
+setx ANTHROPIC_API_KEY "sk-ant-..."        # Windows
+```
+
+### Running RAG mode
+
+```bash
+python src/main.py --ask "something calm for late-night coding"
+python src/main.py --ask                    # interactive prompt
+```
+
+Without `--ask`, the app runs the original profile demo. **Guardrails**: a
+missing key or package is reported cleanly (no stack trace), a failed query
+parse falls back to a neutral profile so retrieval still runs, and every stage
+is logged to stderr.
+
+---
+
 ## Sample Recommendation Output
 
 Paste a sample of your recommender's output here as a text block so a reader can see what it produces:
